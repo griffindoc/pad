@@ -1,0 +1,836 @@
+---
+title: "owndata"
+format: html
+editor: visual
+---
+
+### Libraries
+
+```{r Libraries, include=FALSE}
+library(foreign)
+library(tidyverse)
+library(rstatix)
+library(patchwork)
+library(ragg)
+library(easystats)
+```
+
+### Load data
+
+```{r Load files}
+#| echo: false
+df_own<-read.spss("~/Docs/myRprojects/nhanes/datafiles_own/ironr_1.sav")%>%
+  as.data.frame()
+
+```
+
+### Code PAD from ABI values
+
+```{r Recoding}
+df_own<-df_own%>%
+  mutate(pad=case_when(ABI_LEFT<1.4 & ABI_LEFT<0.9 | ABI_RIGHT<1.4&ABI_RIGHT<0.9~ "Yes",
+                       ABI_LEFT>=1.4|ABI_RIGHT>=1.4~"Yes",
+                       ABI_LEFT<1.4 & ABI_LEFT>0.9 | ABI_RIGHT<1.4&ABI_RIGHT>0.9~"No"),
+         pad=as.factor(pad),
+         diabetes_gp=recode(Diabetes_spectrum,"no diabetes"="No diabetes",
+                            "pre-diabetes"="Prediabetes",
+                 "type 2 diabetes with complications"="Diabetes",
+                 "type 2 diabetes w/o complications"="Diabetes"),
+         Sex=recode(Sex,"Male"="M","Female"="F"),
+         Hypertension=recode(Hypertension,"no"="No","yes"="Yes"))
+
+```
+
+### Recode and select
+
+```{r}
+df_own<-df_own%>%
+  mutate(insulin=if_else(shortinsulin=="Yes"| longinsulin=="Yes"| mixinsulin=="Yes","Yes","No", missing=NA),
+         anti_ht=if_else(calciumant=="Yes"| loop=="Yes"| thiazide=="Yes" |
+                           Spirinolactone=="Yes"| alpha1=="Yes" | alpha2=="Yes"
+                         | raasinhib=="Yes"| betablock=="Yes",
+                         "Yes","No", missing=NA),
+         anti_platelet=if_else(aspirin=="Yes"| clopidogrel=="Yes","Yes","No", missing=NA),
+         across(c(insulin,anti_ht,anti_platelet),as.factor))%>%
+  filter(steroids!="Yes")%>%
+  select(!contains(c("log","cent","log10","anti","disease","albuminuria","mean_IMD")))%>%
+  select(!c(Diabetes:DM,CVD:POAD,bot:sglt2,DiabCVD:filter_.,shortinsulin:others,aspirin:tgfb,NDS:Retinopathy,urinaryKREA:urinaryAlbumin,Diabetesduration,NEPHROPATHY,hsCRPhilow,))
+```
+
+### Recode iron
+
+Iron unit is converted from uM to ug/dl
+
+Cutoffs for categorising quartiles derived from NHANES. If cutoffs are required again: rerun the nhanes_recoding script.
+
+Hemochromatosis and hyperferritinemia are defined
+
+```{r}
+df_own<-df_own%>%
+  mutate(iron=Iron*5.585,
+         tsat_coded=case_when(TSAT<tsat.q$tsat[1]~"0",
+                           between(TSAT,tsat.q$tsat[1],tsat.q$tsat[2]) ~ "1",
+                           between(TSAT,tsat.q$tsat[2],tsat.q$tsat[3]) ~ "2",
+                           TSAT>tsat.q$tsat[3]~"3"),
+         iron_coded=case_when(iron<iron.q$iron[1]~"0",
+                               between(iron,iron.q$iron[1],iron.q$iron[2]) ~ "1",
+                               between(iron,iron.q$iron[2],iron.q$iron[3]) ~ "2",
+                               iron>iron.q$iron[3]~"3"),
+         ferritin_coded=case_when(Ferritin<ferritin.q$ferritin[1]~"0",
+                                 between(Ferritin,ferritin.q$ferritin[1],ferritin.q$ferritin[2]) ~ "1",
+                                 between(Ferritin,ferritin.q$ferritin[2],ferritin.q$ferritin[3]) ~ "2",
+                                 Ferritin>ferritin.q$ferritin[3]~"3"),
+         transferrin_coded=case_when(Transferrin<2.2~ "0",
+                                     between(Transferrin,2.2,2.59)~ "1",
+                                     between(Transferrin,2.6,3)~ "2",
+                                     Transferrin>3~ "3"),
+         hi_ferritin=case_when(TSAT>45 & Sex=="M" & Ferritin>300 |
+                                 TSAT>45 & Sex=="F" & Ferritin>200 ~ "1",
+                               TSAT<=45 & Sex=="M" & Ferritin>300 |
+                                 TSAT<=45 & Sex=="F" & Ferritin>200 ~ "2"),
+         across(c(tsat_coded,ferritin_coded,iron_coded,hi_ferritin,transferrin_coded),as.factor),
+         ferritin.scl=scale(Ferritin),
+         iron.scl=scale(iron),
+         transferrin.scl=scale(Transferrin),
+         tsat.scl=scale(TSAT),
+         icam.scl=scale(ICAM1),
+         vcam.scl=scale(VCAM1),
+         hb_scl=scale(HB),
+         )%>%
+  filter(hi_ferritin!=1| is.na(hi_ferritin))
+
+#save a final datafile for analysis 
+saveRDS(df_own, here::here("datafiles_own","df_own.rds"))
+```
+
+### Load saved data
+
+```{r}
+# Restore saved data
+df_own<- readRDS(here::here("datafiles_own","df_own.rds"))
+
+```
+
+### Recode additional variables
+
+```{r}
+df_own <- df_own |> 
+  mutate(crp_scl=scale(hsCRP),
+         ldl_scl=scale(LDL_CHOL),
+         hba1c_scl=scale(HbA1c))
+#save a final datafile for analysis 
+saveRDS(df_own, here::here("datafiles_own","df_own.rds"))
+```
+
+### PAD models
+
+#### Custom functions
+
+The function is to help run the regression models. Combining with tidy puts the estimates in the table.
+
+```{r Models}
+#define gender stratified datasets
+df_own.m<-df_own%>%filter(Sex=="M")
+df_own.f<-df_own%>%filter(Sex=="F")
+
+#define variables
+pad="pad" 
+iron="iron_coded"
+ferritin="ferritin_coded"
+transferrin="transferrin_coded"
+tsat="tsat_coded"
+iron.cont="iron.scl"
+ferritin.cont="ferritin.scl"
+tsat.cont="tsat.scl"
+transferrin.cont="transferrin.scl"
+icam ="icam.scl"
+vcam="vcam.scl"
+hb="hb_scl"
+
+#define models
+model1 = c("1")
+model2=c(model1,"diabetes_gp","Hypertension")
+model3=c(model2,"crp_scl","urinaryACR","ldl_scl")
+
+
+log_reg= function(model,var) {
+  form = reformulate(c(model,var), response = pad)
+  glm(form, family=binomial, data=df_own) |>
+    model_parameters(exponentiate = TRUE)
+}
+
+
+log_reg.m= function(model,var) {
+  form = reformulate(c(model,var), response = pad)
+  glm(form, family=binomial, data=df_own.m)|>
+    model_parameters(exponentiate = TRUE)
+}
+
+log_reg.f= function(model,var) {
+  form = reformulate(c(model,var), response = pad)
+  glm(form, family=binomial, data=df_own.f)|>
+    model_parameters(exponentiate = TRUE)
+}
+
+
+
+#define color for text
+dark_text<-"#1A242F"
+mid_text <-  monochromeR::generate_palette("#1A242F", "go_lighter", n_colours = 5)[2]
+light_text <-  monochromeR::generate_palette("#1A242F","go_lighter", n_colours = 5)[3] 
+#custom theme
+theme_personal <- function(base_size = 12, 
+                            dark_text = "#1A242F") {
+  
+  mid_text <-  monochromeR::generate_palette(dark_text, "go_lighter", n_colours = 5)[2]
+  light_text <-  monochromeR::generate_palette(dark_text, "go_lighter", n_colours = 5)[3]
+  
+  theme_minimal(base_size = base_size) +
+    theme(text = element_text(colour = mid_text, lineheight = 1.1),
+          plot.title = element_text(colour = dark_text, size = rel(1.4)),
+          plot.subtitle = element_text(size = rel(1.1)),
+          axis.text.y = element_text(colour = light_text, size = rel(0.9)),
+          axis.title.y = element_text(size = 12), 
+          axis.text.x = element_text(colour = mid_text, size = 12),
+          axis.title.x = element_text(size = 12),
+          legend.position = "top",
+          legend.justification = 1,
+          panel.grid = element_line(colour = "#F3F4F5"),
+          plot.caption = element_text(size = rel(0.8)))
+}
+
+```
+
+#### Iron models
+
+```{r}
+
+### gender stratified models
+#model 1 for iron as a continuous variable for males
+log_reg.m(model1,iron.cont)->iron.cont_m.m1
+log_reg.m(model2,iron.cont)->iron.cont_m.m2
+log_reg.m(model3,iron.cont)->iron.cont_m.m3
+
+
+#model 1 for iron as a continuous variable for females
+log_reg.f(model1,iron.cont)->iron.cont_f.m1
+log_reg.f(model2,iron.cont)->iron.cont_f.m2
+log_reg.f(model3,iron.cont)->iron.cont_f.m3
+
+#males: iron continuous
+iron.cont_m.m1<-iron.cont_m.m1%>%
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+iron.cont_m.m2<-iron.cont_m.m2%>%
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+iron.cont_m.m3<-iron.cont_m.m3%>%
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+
+#females: iron continuous
+iron.cont_f.m1<-iron.cont_f.m1%>%
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+iron.cont_f.m2<-iron.cont_f.m2%>%
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+iron.cont_f.m3<-iron.cont_f.m3%>%
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+iron_MF.all <- rbind(iron.cont_m.m1,iron.cont_m.m2,iron.cont_m.m3,
+                     iron.cont_f.m1,iron.cont_f.m2,iron.cont_f.m3)
+rm(iron.cont_m.m1,iron.cont_m.m2,iron.cont_m.m3,
+   iron.cont_f.m1,iron.cont_f.m2,iron.cont_f.m3)
+
+#shape data for plotting
+iron_MF.all <- iron_MF.all |> 
+  mutate_at(vars(CI_low,CI_high),round,2)|>
+  unite("CI",CI_low:CI_high,sep = ", ", remove=FALSE,na.rm = TRUE) |> 
+  mutate(p.val_flag=case_when(Sex=="M" & p<0.05~ "M p<0.05",
+                        Sex=="F" & p<0.05~ "F p<0.05",
+                        p>0.05~ "NS"))
+
+```
+
+#### Ferritin models
+
+```{r}
+
+### gender stratified models
+#model 1 for ferritin as a continuous variable for males
+log_reg.m(model1,ferritin.cont)->ferritin.cont_m.m1
+log_reg.m(model2,ferritin.cont)->ferritin.cont_m.m2
+log_reg.m(model3,ferritin.cont)->ferritin.cont_m.m3
+
+
+#model 1 for ferritin as a continuous variable for females
+log_reg.f(model1,ferritin.cont)->ferritin.cont_f.m1
+log_reg.f(model2,ferritin.cont)->ferritin.cont_f.m2
+log_reg.f(model3,ferritin.cont)->ferritin.cont_f.m3
+
+#males: ferritin continuous
+ferritin.cont_m.m1<-ferritin.cont_m.m1%>%
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+ferritin.cont_m.m2<-ferritin.cont_m.m2%>%
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+ferritin.cont_m.m3<-ferritin.cont_m.m3%>%
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+
+#females: ferritin continuous
+ferritin.cont_f.m1<-ferritin.cont_f.m1%>%
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+ferritin.cont_f.m2<-ferritin.cont_f.m2%>%
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+ferritin.cont_f.m3<-ferritin.cont_f.m3%>%
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+ferritin_MF.all <- rbind(ferritin.cont_m.m1,ferritin.cont_m.m2,ferritin.cont_m.m3,
+                     ferritin.cont_f.m1,ferritin.cont_f.m2,ferritin.cont_f.m3)
+rm(ferritin.cont_m.m1,ferritin.cont_m.m2,ferritin.cont_m.m3,
+   ferritin.cont_f.m1,ferritin.cont_f.m2,ferritin.cont_f.m3)
+
+#shape data for plotting
+ferritin_MF.all <- ferritin_MF.all |> 
+  mutate_at(vars(CI_low,CI_high),round,2)|>
+  unite("CI",CI_low:CI_high,sep = ", ", remove=FALSE,na.rm = TRUE) |> 
+  mutate(p.val_flag=case_when(Sex=="M" & p<0.05~ "M p<0.05",
+                              Sex=="F" & p<0.05~ "F p<0.05",
+                              p>0.05~ "NS"))
+```
+
+#### TSAT models
+
+```{r}
+
+### gender stratified models
+#model 1 for tsat as a continuous variable for males
+log_reg.m(model1,tsat.cont)->tsat.cont_m.m1
+log_reg.m(model2,tsat.cont)->tsat.cont_m.m2
+log_reg.m(model3,tsat.cont)->tsat.cont_m.m3
+
+
+#model 1 for tsat as a continuous variable for females
+log_reg.f(model1,tsat.cont)->tsat.cont_f.m1
+log_reg.f(model2,tsat.cont)->tsat.cont_f.m2
+log_reg.f(model3,tsat.cont)->tsat.cont_f.m3
+
+#males: tsat continuous
+tsat.cont_m.m1<-tsat.cont_m.m1%>%
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+tsat.cont_m.m2<-tsat.cont_m.m2%>%
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+tsat.cont_m.m3<-tsat.cont_m.m3%>%
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+
+#females: tsat continuous
+tsat.cont_f.m1<-tsat.cont_f.m1%>%
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+tsat.cont_f.m2<-tsat.cont_f.m2%>%
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+tsat.cont_f.m3<-tsat.cont_f.m3%>%
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,Parameter, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+tsat_MF.all <- rbind(tsat.cont_m.m1,tsat.cont_m.m2,tsat.cont_m.m3,
+                     tsat.cont_f.m1,tsat.cont_f.m2,tsat.cont_f.m3)
+rm(tsat.cont_m.m1,tsat.cont_m.m2,tsat.cont_m.m3,
+   tsat.cont_f.m1,tsat.cont_f.m2,tsat.cont_f.m3)
+
+#shape data for plotting
+tsat_MF.all <- tsat_MF.all |> 
+  mutate_at(vars(CI_low,CI_high),round,2)|>
+  unite("CI",CI_low:CI_high,sep = ", ", remove=FALSE,na.rm = TRUE) |> 
+  mutate(p.val_flag=case_when(Sex=="M" & p<0.05~ "M p<0.05",
+                              Sex=="F" & p<0.05~ "F p<0.05",
+                              p>0.05~ "NS"))
+
+```
+
+#### PAD: all iron indices
+
+Combine all iron indices vs PAD into one df and save it for plotting
+
+```{r}
+pad.all <- rbind(iron_MF.all,ferritin_MF.all,tsat_MF.all)
+
+#save a final datafile for analysis 
+saveRDS(pad.all, here::here("datafiles_own","pad.all.rds"))
+```
+
+### ICAM models
+
+#### Custom functions
+
+```{r}
+lin_reg.m= function(model,var,dep) {
+  form = reformulate(c(model,var), response = dep)
+  lm(form, data=df_own.m)|>
+    broomExtra::tidy(conf.int=TRUE)
+}
+
+lin_reg.f= function(model,var,dep) {
+  form = reformulate(c(model,var), response = dep)
+  lm(form, data=df_own.f)|>
+    broomExtra::tidy(conf.int=TRUE)
+}
+
+```
+
+#### ICAM vs Iron
+
+```{r}
+# iron vs icam
+icam.iron.m1 <- lin_reg.m(model1,iron.cont,icam) # fit model1 for response 
+icam.iron.m2 <- lin_reg.m(model2,iron.cont,icam) # fit model1 for response 
+icam.iron.m3 <- lin_reg.m(model3,iron.cont,icam) # fit model1 for response 
+
+icam.iron.m1 <- icam.iron.m1 |> 
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+icam.iron.m2 <- icam.iron.m2 |> 
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+icam.iron.m3 <- icam.iron.m3 |> 
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+# iron vs icam
+icam.iron.f1 <- lin_reg.f(model1,iron.cont,icam) # fit model1 for response 
+icam.iron.f2 <- lin_reg.f(model2,iron.cont,icam) # fit model1 for response 
+icam.iron.f3 <- lin_reg.f(model3,iron.cont,icam) # fit model1 for response 
+
+icam.iron.f1 <- icam.iron.f1 |> 
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+icam.iron.f2 <- icam.iron.f2 |> 
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+icam.iron.f3 <- icam.iron.f3 |> 
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+icam.iron_MF.all <- rbind(icam.iron.m1,icam.iron.m2,icam.iron.m3,icam.iron.f1,
+                          icam.iron.f2,icam.iron.f3)
+rm(icam.iron.m1,icam.iron.m2,icam.iron.m3,icam.iron.f1,
+      icam.iron.f2,icam.iron.f3)
+```
+
+#### ICAM vs Ferritin
+
+```{r}
+# ferritin vs icam
+icam.ferritin.m1 <- lin_reg.m(model1,ferritin.cont,icam) # fit model1 for response 
+icam.ferritin.m2 <- lin_reg.m(model2,ferritin.cont,icam) # fit model1 for response 
+icam.ferritin.m3 <- lin_reg.m(model3,ferritin.cont,icam) # fit model1 for response 
+
+icam.ferritin.m1 <- icam.ferritin.m1 |> 
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+icam.ferritin.m2 <- icam.ferritin.m2 |> 
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+icam.ferritin.m3 <- icam.ferritin.m3 |> 
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+# ferritin vs icam
+icam.ferritin.f1 <- lin_reg.f(model1,ferritin.cont,icam) # fit model1 for response 
+icam.ferritin.f2 <- lin_reg.f(model2,ferritin.cont,icam) # fit model1 for response 
+icam.ferritin.f3 <- lin_reg.f(model3,ferritin.cont,icam) # fit model1 for response 
+
+icam.ferritin.f1 <- icam.ferritin.f1 |> 
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+icam.ferritin.f2 <- icam.ferritin.f2 |> 
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+icam.ferritin.f3 <- icam.ferritin.f3 |> 
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+icam.ferritin_MF.all <- rbind(icam.ferritin.m1,icam.ferritin.m2,icam.ferritin.m3,icam.ferritin.f1,
+                          icam.ferritin.f2,icam.ferritin.f3)
+rm(icam.ferritin.m1,icam.ferritin.m2,icam.ferritin.m3,icam.ferritin.f1,
+      icam.ferritin.f2,icam.ferritin.f3)
+```
+
+#### ICAM vs TSAT
+
+```{r}
+# tsat vs icam
+icam.tsat.m1 <- lin_reg.m(model1,tsat.cont,icam) # fit model1 for response 
+icam.tsat.m2 <- lin_reg.m(model2,tsat.cont,icam) # fit model1 for response 
+icam.tsat.m3 <- lin_reg.m(model3,tsat.cont,icam) # fit model1 for response 
+
+icam.tsat.m1 <- icam.tsat.m1 |> 
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+icam.tsat.m2 <- icam.tsat.m2 |> 
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+icam.tsat.m3 <- icam.tsat.m3 |> 
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+# tsat vs icam
+icam.tsat.f1 <- lin_reg.f(model1,tsat.cont,icam) # fit model1 for response 
+icam.tsat.f2 <- lin_reg.f(model2,tsat.cont,icam) # fit model1 for response 
+icam.tsat.f3 <- lin_reg.f(model3,tsat.cont,icam) # fit model1 for response 
+
+icam.tsat.f1 <- icam.tsat.f1 |> 
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+icam.tsat.f2 <- icam.tsat.f2 |> 
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+icam.tsat.f3 <- icam.tsat.f3 |> 
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+icam.tsat_MF.all <- rbind(icam.tsat.m1,icam.tsat.m2,icam.tsat.m3,icam.tsat.f1,
+                          icam.tsat.f2,icam.tsat.f3)
+rm(icam.tsat.m1,icam.tsat.m2,icam.tsat.m3,icam.tsat.f1,
+      icam.tsat.f2,icam.tsat.f3)
+```
+
+#### ICAM: all iron indices
+
+```{r}
+icam.iron.all <- rbind(icam.iron_MF.all,icam.ferritin_MF.all,icam.tsat_MF.all)
+#save a final datafile for analysis 
+saveRDS(icam.iron.all, here::here("datafiles_own","icam.iron.all.rds"))
+```
+
+### VCAM models
+
+#### VCAM vs iron
+
+```{r}
+# iron vs vcam
+vcam.iron.m1 <- lin_reg.m(model1,iron.cont,vcam) # fit model1 for response 
+vcam.iron.m2 <- lin_reg.m(model2,iron.cont,vcam) # fit model1 for response 
+vcam.iron.m3 <- lin_reg.m(model3,iron.cont,vcam) # fit model1 for response 
+
+vcam.iron.m1 <- vcam.iron.m1 |> 
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+vcam.iron.m2 <- vcam.iron.m2 |> 
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+vcam.iron.m3 <- vcam.iron.m3 |> 
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+# iron vs vcam
+vcam.iron.f1 <- lin_reg.f(model1,iron.cont,vcam) # fit model1 for response 
+vcam.iron.f2 <- lin_reg.f(model2,iron.cont,vcam) # fit model1 for response 
+vcam.iron.f3 <- lin_reg.f(model3,iron.cont,vcam) # fit model1 for response 
+
+vcam.iron.f1 <- vcam.iron.f1 |> 
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+vcam.iron.f2 <- vcam.iron.f2 |> 
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+vcam.iron.f3 <- vcam.iron.f3 |> 
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+vcam.iron_MF.all <- rbind(vcam.iron.m1,vcam.iron.m2,vcam.iron.m3,vcam.iron.f1,
+                          vcam.iron.f2,vcam.iron.f3)
+rm(vcam.iron.m1,vcam.iron.m2,vcam.iron.m3,vcam.iron.f1,
+   vcam.iron.f2,vcam.iron.f3)
+```
+
+#### VCAM vs Ferritin
+
+```{r}
+# ferritin vs vcam
+vcam.ferritin.m1 <- lin_reg.m(model1,ferritin.cont,vcam) # fit model1 for response 
+vcam.ferritin.m2 <- lin_reg.m(model2,ferritin.cont,vcam) # fit model1 for response 
+vcam.ferritin.m3 <- lin_reg.m(model3,ferritin.cont,vcam) # fit model1 for response 
+
+vcam.ferritin.m1 <- vcam.ferritin.m1 |> 
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+vcam.ferritin.m2 <- vcam.ferritin.m2 |> 
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+vcam.ferritin.m3 <- vcam.ferritin.m3 |> 
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+# ferritin vs vcam
+vcam.ferritin.f1 <- lin_reg.f(model1,ferritin.cont,vcam) # fit model1 for response 
+vcam.ferritin.f2 <- lin_reg.f(model2,ferritin.cont,vcam) # fit model1 for response 
+vcam.ferritin.f3 <- lin_reg.f(model3,ferritin.cont,vcam) # fit model1 for response 
+
+vcam.ferritin.f1 <- vcam.ferritin.f1 |> 
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+vcam.ferritin.f2 <- vcam.ferritin.f2 |> 
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+vcam.ferritin.f3 <- vcam.ferritin.f3 |> 
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+vcam.ferritin_MF.all <- rbind(vcam.ferritin.m1,vcam.ferritin.m2,vcam.ferritin.m3,vcam.ferritin.f1,
+                              vcam.ferritin.f2,vcam.ferritin.f3)
+rm(vcam.ferritin.m1,vcam.ferritin.m2,vcam.ferritin.m3,vcam.ferritin.f1,
+   vcam.ferritin.f2,vcam.ferritin.f3)
+
+```
+
+#### VCAM vs TSAT
+
+```{r}
+# tsat vs vcam
+vcam.tsat.m1 <- lin_reg.m(model1,tsat.cont,vcam) # fit model1 for response 
+vcam.tsat.m2 <- lin_reg.m(model2,tsat.cont,vcam) # fit model1 for response 
+vcam.tsat.m3 <- lin_reg.m(model3,tsat.cont,vcam) # fit model1 for response 
+
+vcam.tsat.m1 <- vcam.tsat.m1 |> 
+  mutate(model="Model 1",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+vcam.tsat.m2 <- vcam.tsat.m2 |> 
+  mutate(model="Model 2",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+vcam.tsat.m3 <- vcam.tsat.m3 |> 
+  mutate(model="Model 3",
+         Sex="M")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+# tsat vs vcam
+vcam.tsat.f1 <- lin_reg.f(model1,tsat.cont,vcam) # fit model1 for response 
+vcam.tsat.f2 <- lin_reg.f(model2,tsat.cont,vcam) # fit model1 for response 
+vcam.tsat.f3 <- lin_reg.f(model3,tsat.cont,vcam) # fit model1 for response 
+
+vcam.tsat.f1 <- vcam.tsat.f1 |> 
+  mutate(model="Model 1",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1))
+
+vcam.tsat.f2 <- vcam.tsat.f2 |> 
+  mutate(model="Model 2",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:4))
+
+vcam.tsat.f3 <- vcam.tsat.f3 |> 
+  mutate(model="Model 3",
+         Sex="F")%>%
+  unite("variable",model,term, sep=":",na.rm = TRUE, remove = FALSE)%>%
+  slice(.,-(1:7))
+
+vcam.tsat_MF.all <- rbind(vcam.tsat.m1,vcam.tsat.m2,vcam.tsat.m3,vcam.tsat.f1,
+                          vcam.tsat.f2,vcam.tsat.f3)
+rm(vcam.tsat.m1,vcam.tsat.m2,vcam.tsat.m3,vcam.tsat.f1,
+      vcam.tsat.f2,vcam.tsat.f3)
+```
+
+#### VCAM: all iron indices
+
+```{r}
+vcam.iron.all <- rbind(vcam.iron_MF.all,vcam.ferritin_MF.all,vcam.tsat_MF.all)
+#save a final datafile for analysis 
+saveRDS(vcam.iron.all, here::here("datafiles_own","vcam.iron.all.rds"))
+```
+
+### Demographic table
+
+```{r Demographics}
+#| echo: false
+
+library(gtsummary)
+
+demo_table<-df_own%>%
+  tbl_strata(
+    strata = Sex,
+    .tbl_fun =
+      ~ .x %>%
+  tbl_summary(
+  by = pad,
+  statistic = list(all_continuous() ~ "{mean} ({sd})"),
+  missing = "no") %>% # don't list missing data separately
+  add_n() %>% # add column with total number of non-missing observations
+  add_p() %>%
+  modify_header(label = "**Variable**"))%>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path=here::here("tables","Demo.heist.docx"))
+```
+
+### Missing data
+
+```{r}
+#examine missing data
+library("finalfit")
+
+# Examine with ff_glimpse
+explanatory = c("ICAM1", "VCAM1", 
+                "Age", "Hypertension",  
+                "LDL_CHOL", "BMI","Iron","Ferritin","Transferrin","TSAT",
+                "pad","diabetes_gp","hsCRP")
+dependent = "pad"
+
+#examine missing data
+df_own %>% 
+  ff_glimpse(dependent, explanatory)
+
+#visualize missing data
+df_own%>%
+  missing_pattern(dependent, explanatory)
+
+```

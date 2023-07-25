@@ -1,0 +1,579 @@
+---
+title: "nhanes_analysis"
+format: html
+editor: visual
+---
+
+## Dependencies
+
+```{r,include=FALSE}
+library(tidyverse)
+library(srvyr)
+library(svyVGAM)
+library(broom)
+library(patchwork)
+```
+
+## Load data
+
+#multinomial regression using survey weights
+
+#ref:https://tech.popdata.org/pma-data-hub/posts/2021-08-15-covid-analysis/
+
+```{r Load analysis datafile}
+#| echo: false
+# Restore appended NHANES dataset as survey design
+nhanes.all<-readRDS(here::here("data_files","nhanes.all.rds"))
+```
+
+### Custom functions
+
+Since svyVGAM cannot be directly converted to tidy output, we use a customised function.
+
+```{r}
+#| echo: false
+#function to convert to a tidymodel
+tidy.svyVGAM <- function(
+    x, 
+    conf.int = FALSE, 
+    conf.level = 0.95,
+    exponentiate = FALSE, 
+    ...
+){
+  # Replace `summary(x)$coefficients` with `summary(x)$coeftable`
+  ret <- as_tibble(summary(x)$coeftable, rownames = "term")
+  
+  # All of this stays the same:
+  colnames(ret) <- c("term", "estimate", "std.error", "statistic", "p.value")
+  coefs <- tibble::enframe(stats::coef(x), name = "term", value = "estimate")
+  ret <- left_join(coefs, ret, by = c("term", "estimate"))
+  if (conf.int){
+    ci <- broom:::broom_confint_terms(x, level = conf.level, ...)
+    ret <- dplyr::left_join(ret, ci, by = "term")
+  }
+  if (exponentiate){ret <- broom:::exponentiate(ret)}
+}
+
+#custom theme
+theme_personal <- function(base_size = 12, 
+                            dark_text = "#1A242F") {
+  
+  mid_text <-  monochromeR::generate_palette(dark_text, "go_lighter", n_colours = 5)[2]
+  light_text <-  monochromeR::generate_palette(dark_text, "go_lighter", n_colours = 5)[3]
+  
+  theme_minimal(base_size = base_size) +
+    theme(text = element_text(colour = mid_text, lineheight = 1.1),
+          plot.title = element_text(colour = dark_text, size = rel(1.4)),
+          plot.subtitle = element_text(size = rel(1.1)),
+          axis.text.y = element_text(colour = light_text, size = rel(0.9)),
+          axis.title.y = element_text(size = 12), 
+          axis.text.x = element_text(colour = mid_text, size = 12),
+          axis.title.x = element_text(size = 12),
+          legend.position = "top",
+          legend.justification = 1,
+          panel.grid = element_line(colour = "#F3F4F5"),
+          plot.caption = element_text(size = rel(0.8)))
+}
+
+```
+
+### Gender stratified
+
+```{r}
+#define gender-stratified survey designs
+#subsetting data the right way by incorporating the design
+nhanes.all.m<-subset(nhanes.all,gender=="0")
+nhanes.all.f<-subset(nhanes.all,gender=="1")
+```
+
+#### All iron
+
+#### Iron: gender stratified
+
+```{r}
+
+#define variables
+dependent_var <- "pad"
+model2_vars <- c("age", "ethnicity", "bmi", "smoking_coded")
+model3_vars <- c("diab_coded", "fib4_coded", "acr_scaled", "crp_scaled", "ht_coded")
+model4_vars <- "ldl_scaled"
+
+#define iron variables
+iron_scaled <- "iron_scaled"
+
+#define model parameters for iron as a continuous variable
+iron.cont.model1_form <- paste(dependent_var, "~", iron_scaled, collapse = " ")
+iron.cont.model2_form <- paste(dependent_var, "~", iron_scaled, "+", paste(model2_vars, collapse = "+"), collapse = " ")
+iron.cont.model3_form <- paste(dependent_var, "~", iron_scaled, "+", paste(c(model2_vars, model3_vars), collapse = "+"), collapse = " ")
+iron.cont.model4_form <- paste(dependent_var, "~", iron_scaled, "+", paste(c(model2_vars, model3_vars, model4_vars), collapse = "+"), collapse = " ")
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_M= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.m, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+iron_cont_M.m1<-my.reg_M(iron.cont.model1_form)
+iron_cont_M.m2<-my.reg_M(iron.cont.model2_form)
+iron_cont_M.m3<-my.reg_M(iron.cont.model3_form)
+iron_cont_M.m4<-my.reg_M(iron.cont.model4_form)
+
+
+#add model as a column for graphs
+
+iron_cont_M.m1$model<-"Model 1"
+iron_cont_M.m2$model<-"Model 2"
+iron_cont_M.m3$model<-"Model 3"
+iron_cont_M.m4$model<-"Model 4"
+
+#combine into one dataframe
+iron_M.sens<-rbind(
+                  iron_cont_M.m1[2,1:8],iron_cont_M.m2[2,1:8],
+                  iron_cont_M.m3[2,1:8],iron_cont_M.m4[2,1:8])
+rm(iron_cont_M.m1,iron_cont_M.m2,iron_cont_M.m3,iron_cont_M.m4)
+
+#define confidence interval
+iron_M.sens<-iron_M.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="M")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_F= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.f, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+iron_cont_F.m1<-my.reg_F(iron.cont.model1_form)
+iron_cont_F.m2<-my.reg_F(iron.cont.model2_form)
+iron_cont_F.m3<-my.reg_F(iron.cont.model3_form)
+iron_cont_F.m4<-my.reg_F(iron.cont.model4_form)
+
+
+#add model as a column for graphs
+
+iron_cont_F.m1$model<-"Model 1"
+iron_cont_F.m2$model<-"Model 2"
+iron_cont_F.m3$model<-"Model 3"
+iron_cont_F.m4$model<-"Model 4"
+
+#combine into one dataframe
+iron_F.sens<-rbind(
+                  iron_cont_F.m1[2,1:8],iron_cont_F.m2[2,1:8],
+                  iron_cont_F.m3[2,1:8],iron_cont_F.m4[2,1:8])
+rm(iron_cont_F.m1,iron_cont_F.m2,iron_cont_F.m3,iron_cont_F.m4)
+
+#define confidence interval
+iron_F.sens<-iron_F.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="F")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+iron_MF.sens<-rbind(iron_M.sens,iron_F.sens)
+rm(iron_M.sens,iron_F.sens)
+
+saveRDS(iron_MF.sens,here::here("data_files","iron_MF.sens.rds"))
+```
+
+#### Ferritin: gender stratified
+
+```{r}
+
+#define variables
+dependent_var <- "pad"
+model2_vars <- c("age", "ethnicity", "bmi", "smoking_coded")
+model3_vars <- c("diab_coded", "fib4_coded", "acr_scaled", "crp_scaled", "ht_coded")
+model4_vars <- "ldl_scaled"
+
+#define ferritin variables
+ferritin_scaled <- "ferritin_scaled"
+
+#define model parameters for ferritin as a continuous variable
+ferritin.cont.model1_form <- paste(dependent_var, "~", ferritin_scaled, collapse = " ")
+ferritin.cont.model2_form <- paste(dependent_var, "~", ferritin_scaled, "+", paste(model2_vars, collapse = "+"), collapse = " ")
+ferritin.cont.model3_form <- paste(dependent_var, "~", ferritin_scaled, "+", paste(c(model2_vars, model3_vars), collapse = "+"), collapse = " ")
+ferritin.cont.model4_form <- paste(dependent_var, "~", ferritin_scaled, "+", paste(c(model2_vars, model3_vars, model4_vars), collapse = "+"), collapse = " ")
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_M= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.m, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+ferritin_cont_M.m1<-my.reg_M(ferritin.cont.model1_form)
+ferritin_cont_M.m2<-my.reg_M(ferritin.cont.model2_form)
+ferritin_cont_M.m3<-my.reg_M(ferritin.cont.model3_form)
+ferritin_cont_M.m4<-my.reg_M(ferritin.cont.model4_form)
+
+
+#add model as a column for graphs
+
+ferritin_cont_M.m1$model<-"Model 1"
+ferritin_cont_M.m2$model<-"Model 2"
+ferritin_cont_M.m3$model<-"Model 3"
+ferritin_cont_M.m4$model<-"Model 4"
+
+#combine into one dataframe
+ferritin_M.sens<-rbind(
+  ferritin_cont_M.m1[2,1:8],ferritin_cont_M.m2[2,1:8],
+  ferritin_cont_M.m3[2,1:8],ferritin_cont_M.m4[2,1:8])
+rm(ferritin_cont_M.m1,ferritin_cont_M.m2,ferritin_cont_M.m3,ferritin_cont_M.m4)
+
+#define confidence interval
+ferritin_M.sens<-ferritin_M.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="M")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_F= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.f, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+ferritin_cont_F.m1<-my.reg_F(ferritin.cont.model1_form)
+ferritin_cont_F.m2<-my.reg_F(ferritin.cont.model2_form)
+ferritin_cont_F.m3<-my.reg_F(ferritin.cont.model3_form)
+ferritin_cont_F.m4<-my.reg_F(ferritin.cont.model4_form)
+
+
+#add model as a column for graphs
+
+ferritin_cont_F.m1$model<-"Model 1"
+ferritin_cont_F.m2$model<-"Model 2"
+ferritin_cont_F.m3$model<-"Model 3"
+ferritin_cont_F.m4$model<-"Model 4"
+
+#combine into one dataframe
+ferritin_F.sens<-rbind(
+  ferritin_cont_F.m1[2,1:8],ferritin_cont_F.m2[2,1:8],
+  ferritin_cont_F.m3[2,1:8],ferritin_cont_F.m4[2,1:8])
+rm(ferritin_cont_F.m1,ferritin_cont_F.m2,ferritin_cont_F.m3,ferritin_cont_F.m4)
+
+#define confidence interval
+ferritin_F.sens<-ferritin_F.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="F")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+ferritin_MF.sens<-rbind(ferritin_M.sens,ferritin_F.sens)
+rm(ferritin_M.sens,ferritin_F.sens)
+
+saveRDS(ferritin_MF.sens,here::here("data_files","ferritin_MF.sens.rds"))
+```
+
+#### TSAT: gender stratified
+
+```{r}
+
+#define variables
+dependent_var <- "pad"
+model2_vars <- c("age", "ethnicity", "bmi", "smoking_coded")
+model3_vars <- c("diab_coded", "fib4_coded", "acr_scaled", "crp_scaled", "ht_coded")
+model4_vars <- "ldl_scaled"
+
+#define tsat variables
+tsat_scaled <- "tsat_scaled"
+
+#define model parameters for tsat as a continuous variable
+tsat.cont.model1_form <- paste(dependent_var, "~", tsat_scaled, collapse = " ")
+tsat.cont.model2_form <- paste(dependent_var, "~", tsat_scaled, "+", paste(model2_vars, collapse = "+"), collapse = " ")
+tsat.cont.model3_form <- paste(dependent_var, "~", tsat_scaled, "+", paste(c(model2_vars, model3_vars), collapse = "+"), collapse = " ")
+tsat.cont.model4_form <- paste(dependent_var, "~", tsat_scaled, "+", paste(c(model2_vars, model3_vars, model4_vars), collapse = "+"), collapse = " ")
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_M= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.m, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+tsat_cont_M.m1<-my.reg_M(tsat.cont.model1_form)
+tsat_cont_M.m2<-my.reg_M(tsat.cont.model2_form)
+tsat_cont_M.m3<-my.reg_M(tsat.cont.model3_form)
+tsat_cont_M.m4<-my.reg_M(tsat.cont.model4_form)
+
+
+#add model as a column for graphs
+
+tsat_cont_M.m1$model<-"Model 1"
+tsat_cont_M.m2$model<-"Model 2"
+tsat_cont_M.m3$model<-"Model 3"
+tsat_cont_M.m4$model<-"Model 4"
+
+#combine into one dataframe
+tsat_M.sens<-rbind(
+  tsat_cont_M.m1[2,1:8],tsat_cont_M.m2[2,1:8],
+  tsat_cont_M.m3[2,1:8],tsat_cont_M.m4[2,1:8])
+rm(tsat_cont_M.m1,tsat_cont_M.m2,tsat_cont_M.m3,tsat_cont_M.m4)
+
+#define confidence interval
+tsat_M.sens<-tsat_M.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="M")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_F= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.f, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+tsat_cont_F.m1<-my.reg_F(tsat.cont.model1_form)
+tsat_cont_F.m2<-my.reg_F(tsat.cont.model2_form)
+tsat_cont_F.m3<-my.reg_F(tsat.cont.model3_form)
+tsat_cont_F.m4<-my.reg_F(tsat.cont.model4_form)
+
+
+#add model as a column for graphs
+
+tsat_cont_F.m1$model<-"Model 1"
+tsat_cont_F.m2$model<-"Model 2"
+tsat_cont_F.m3$model<-"Model 3"
+tsat_cont_F.m4$model<-"Model 4"
+
+#combine into one dataframe
+tsat_F.sens<-rbind(
+  tsat_cont_F.m1[2,1:8],tsat_cont_F.m2[2,1:8],
+  tsat_cont_F.m3[2,1:8],tsat_cont_F.m4[2,1:8])
+rm(tsat_cont_F.m1,tsat_cont_F.m2,tsat_cont_F.m3,tsat_cont_F.m4)
+
+#define confidence interval
+tsat_F.sens<-tsat_F.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="F")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+tsat_MF.sens<-rbind(tsat_M.sens,tsat_F.sens)
+rm(tsat_M.sens,tsat_F.sens)
+
+saveRDS(tsat_MF.sens,here::here("data_files","tsat_MF.sens.rds"))
+```
+
+#### TIBC: gender stratified
+
+```{r}
+
+#define variables
+dependent_var <- "pad"
+model2_vars <- c("age", "ethnicity", "bmi", "smoking_coded")
+model3_vars <- c("diab_coded", "fib4_coded", "acr_scaled", "crp_scaled", "ht_coded")
+model4_vars <- "ldl_scaled"
+
+#define tibc variables
+tibc_scaled <- "tibc_scaled"
+
+#define model parameters for tibc as a continuous variable
+tibc.cont.model1_form <- paste(dependent_var, "~", tibc_scaled, collapse = " ")
+tibc.cont.model2_form <- paste(dependent_var, "~", tibc_scaled, "+", paste(model2_vars, collapse = "+"), collapse = " ")
+tibc.cont.model3_form <- paste(dependent_var, "~", tibc_scaled, "+", paste(c(model2_vars, model3_vars), collapse = "+"), collapse = " ")
+tibc.cont.model4_form <- paste(dependent_var, "~", tibc_scaled, "+", paste(c(model2_vars, model3_vars, model4_vars), collapse = "+"), collapse = " ")
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_M= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.m, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+tibc_cont_M.m1<-my.reg_M(tibc.cont.model1_form)
+tibc_cont_M.m2<-my.reg_M(tibc.cont.model2_form)
+tibc_cont_M.m3<-my.reg_M(tibc.cont.model3_form)
+tibc_cont_M.m4<-my.reg_M(tibc.cont.model4_form)
+
+
+#add model as a column for graphs
+
+tibc_cont_M.m1$model<-"Model 1"
+tibc_cont_M.m2$model<-"Model 2"
+tibc_cont_M.m3$model<-"Model 3"
+tibc_cont_M.m4$model<-"Model 4"
+
+#combine into one dataframe
+tibc_M.sens<-rbind(
+  tibc_cont_M.m1[2,1:8],tibc_cont_M.m2[2,1:8],
+  tibc_cont_M.m3[2,1:8],tibc_cont_M.m4[2,1:8])
+rm(tibc_cont_M.m1,tibc_cont_M.m2,tibc_cont_M.m3,tibc_cont_M.m4)
+
+#define confidence interval
+tibc_M.sens<-tibc_M.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="M")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+
+
+#define the function to carrout regression and summarize the result
+my.reg_F= function(model) {
+  svyVGAM::svy_vglm(
+    formula = as.formula(model),
+    design = nhanes.all.f, 
+    family = propodds())%>%
+    tidy.svyVGAM(., exponentiate = TRUE,conf.int = TRUE)
+}
+
+tibc_cont_F.m1<-my.reg_F(tibc.cont.model1_form)
+tibc_cont_F.m2<-my.reg_F(tibc.cont.model2_form)
+tibc_cont_F.m3<-my.reg_F(tibc.cont.model3_form)
+tibc_cont_F.m4<-my.reg_F(tibc.cont.model4_form)
+
+
+#add model as a column for graphs
+
+tibc_cont_F.m1$model<-"Model 1"
+tibc_cont_F.m2$model<-"Model 2"
+tibc_cont_F.m3$model<-"Model 3"
+tibc_cont_F.m4$model<-"Model 4"
+
+#combine into one dataframe
+tibc_F.sens<-rbind(
+  tibc_cont_F.m1[2,1:8],tibc_cont_F.m2[2,1:8],
+  tibc_cont_F.m3[2,1:8],tibc_cont_F.m4[2,1:8])
+rm(tibc_cont_F.m1,tibc_cont_F.m2,tibc_cont_F.m3,tibc_cont_F.m4)
+
+#define confidence interval
+tibc_F.sens<-tibc_F.sens%>%
+  mutate(p.val_flag=ifelse(p.value<0.05,"p<0.05","NS"),
+         sex="F")%>%
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+tibc_MF.sens<-rbind(tibc_M.sens,tibc_F.sens)
+rm(tibc_M.sens,tibc_F.sens)
+
+saveRDS(tibc_MF.sens,here::here("data_files","tibc_MF.sens.rds"))
+```
+
+#### Combine dataframes
+
+```{r}
+df_sens<-rbind(iron_MF.sens,ferritin_MF.sens,tsat_MF.sens,tibc_MF.sens)
+rm(iron_MF.sens,ferritin_MF.sens,tsat_MF.sens,tibc_MF.sens)
+saveRDS(df_sens,here::here("data_files","df_sens.rds"))
+```
+
+### Generate reports
+
+#### Ferritin
+
+```{r}
+# Extract the parameters for rows with p-value < 0.05
+params <- ferritin_MF.all[ferritin_MF.all$p.value < 0.05, c("variable", "sex","estimate", "conf.low", "conf.high", "p.value")]
+
+# Initialize an empty character vector for storing the statements
+statements <- c()
+
+# Loop through each row with p-value < 0.05 and create a statement
+for (i in 1:nrow(params)) {
+  statement <- paste0("(", params[i, "sex"],">",params[i, "variable"], ": OR ", round(params[i, "estimate"], 2), ", 95% CI ",
+                      round(params[i, "conf.low"], 2), "-", round(params[i, "conf.high"], 2), ", P=",
+                      round(params[i, "p.value"], 3), ")")
+  # Add the statement to the vector
+  statements <- c(statements, statement)
+}
+
+# Combine the statements into a single string
+ferritin.report <- paste(statements, collapse = " ")
+```
+
+#### TSAT
+
+```{r}
+#tsat
+# Extract the parameters for rows with p-value < 0.05
+params <- tsat_MF.all[tsat_MF.all$p.value < 0.05, c("variable", "sex","estimate", "conf.low", "conf.high", "p.value")]
+
+# Initialize an empty character vector for storing the statements
+statements <- c()
+
+# Loop through each row with p-value < 0.05 and create a statement
+for (i in 1:nrow(params)) {
+  statement <- paste0("(", params[i, "sex"],">",params[i, "variable"], ": OR ", round(params[i, "estimate"], 2), ", 95% CI ",
+                      round(params[i, "conf.low"], 2), "-", round(params[i, "conf.high"], 2), ", P=",
+                      round(params[i, "p.value"], 3), ")")
+  # Add the statement to the vector
+  statements <- c(statements, statement)
+}
+
+# Combine the statements into a single string
+tsat.report <- paste(statements, collapse = " ")
+```
+
+#### Iron
+
+```{r}
+#iron
+# Extract the parameters for rows with p-value < 0.05
+params <- iron_MF.all[iron_MF.all$p.value < 0.05, c("variable", "sex","estimate", "conf.low", "conf.high", "p.value")]
+
+# Initialize an empty character vector for storing the statements
+statements <- c()
+
+# Loop through each row with p-value < 0.05 and create a statement
+for (i in 1:nrow(params)) {
+  statement <- paste0("(", params[i, "sex"],">",params[i, "variable"], ": OR ", round(params[i, "estimate"], 2), ", 95% CI ",
+                      round(params[i, "conf.low"], 2), "-", round(params[i, "conf.high"], 2), ", P=",
+                      round(params[i, "p.value"], 3), ")")
+  # Add the statement to the vector
+  statements <- c(statements, statement)
+}
+
+# Combine the statements into a single string
+iron.report <- paste(statements, collapse = " ")
+```
+
+#### TIBC
+
+```{r}
+#tibc
+# Extract the parameters for rows with p-value < 0.05
+params <- tibc_MF.all[tibc_MF.all$p.value < 0.05, c("variable", "sex","estimate", "conf.low", "conf.high", "p.value")]
+
+# Initialize an empty character vector for storing the statements
+statements <- c()
+
+# Loop through each row with p-value < 0.05 and create a statement
+for (i in 1:nrow(params)) {
+  statement <- paste0("(", params[i, "sex"],">",params[i, "variable"], ": OR ", round(params[i, "estimate"], 2), ", 95% CI ",
+                      round(params[i, "conf.low"], 2), "-", round(params[i, "conf.high"], 2), ", P=",
+                      round(params[i, "p.value"], 3), ")")
+  # Add the statement to the vector
+  statements <- c(statements, statement)
+}
+
+# Combine the statements into a single string
+tibc.report <- paste(statements, collapse = " ")
+
+```

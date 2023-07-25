@@ -1,0 +1,300 @@
+---
+title: "nhanes"
+format: html
+editor: visual
+---
+
+Load libraries
+
+```{r Dependencies}
+#| echo: false
+library(foreign)
+library(tidyverse)
+library(purrr)
+library(svyVGAM)
+```
+
+Loading NHANES data and save as a R data file. A separate dataframe with column names is also saved separately. Helps to search variables easily.
+
+For NHANES data, handling need to be done calculating the survey weights.
+
+```{r 1999-2000}
+#| echo: false
+#read file directly from the url of NHANES
+
+#df for 1999-2000 
+abpi_9900<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LEXABPI.XPT"))
+alliron_9900<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB06.XPT"))
+diab_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/DIQ.XPT"))
+demo_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/DEMO.XPT"))
+ldl_tg_9900<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB13AM.XPT"))
+hdl_total_9900<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB13.XPT"))
+crp_9900<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB11.XPT"))
+gluc_ins_9900<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB10AM.XPT"))
+otherlab_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB18.XPT"))
+ht_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/BPQ.XPT"))
+smoking_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/SMQ.XPT"))
+bmi_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/BMX.XPT"))
+hemo_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB25.XPT"))
+preg_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/SEQ.XPT"))
+medcon_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/MCQ.XPT"))
+alc_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/ALQ.XPT"))
+hba1c_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB10.XPT"))
+paq_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/PAQIAF.XPT"))
+paq2_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/PAQ.XPT"))
+bld.don_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/HSQ.XPT"))
+rep.health_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/RHQ.XPT"))
+oral.health_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/OHXREF.XPT"))
+urine_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/LAB16.XPT"))
+#0912 is the drug code for antihyperlipidemics in 99-00
+#to pickup antiplatelet, use name detection
+pattern <- paste(c("ASPIRIN", "CLOPIDOGREL", "TICLOPIDINE","DIPYRIDAMOLE"), collapse = "|")
+medicine_9900<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/RXQ_RX.XPT"))%>%
+  select(SEQN,RXD240B,FDACODE1,FDACODE2,FDACODE3,FDACODE4,FDACODE5,FDACODE6)%>%
+  mutate(antihy.lipid=rowSums(across(.cols = everything(), ~str_detect(.x, fixed("0912")))),
+         anti.platelet=if_else(str_detect(RXD240B,regex(pattern)),1,0))%>%
+  select(SEQN,antihy.lipid,anti.platelet)%>%
+  unique()
+rm(pattern)
+bp_9900<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/BPX.XPT"))
+
+#merge all dataframes and save as reference data file
+df9900<-purrr::reduce(list(alliron_9900,diab_9900,demo_9900,
+                               ldl_tg_9900,hdl_total_9900,
+                               crp_9900,gluc_ins_9900,otherlab_9900,ht_9900,smoking_9900,bmi_9900,hemo_9900,preg_9900,medcon_9900,alc_9900,hba1c_9900,paq_9900,paq2_9900,
+                           bld.don_9900,rep.health_9900,oral.health_9900,urine_9900,medicine_9900,bp_9900),
+                          dplyr::full_join, by = 'SEQN')%>%
+  right_join(abpi_9900,by = 'SEQN')%>%
+  mutate(MEC6YR=2/3 * WTMEC4YR)#calculate survey weight
+  
+#as_survey_design(weights = MEC6YR,ids = SDMVPSU)%>%
+#  summarise(mean_age=survey_mean(RIDAGEYR,vartype=NULL))
+
+
+#save a single object to a file
+saveRDS(df9900, "~/Docs/myRprojects/nhanes/data_files/df9900.rds")
+
+
+#save colnames and attributes as a separate dataframe
+#df9900_names<-purrr::map_df(df9900, ~attributes(.x)) %>%
+#  bind_cols(names = names(df9900), .)
+#saveRDS(df9900_names, "~/Docs/myRprojects/nhanes/data_files/df9900_names.rds")
+
+
+```
+
+```{r NHANES 2001-2002}
+#read file directly from the url of NHANES
+
+#df for 2001-2002 
+abpi_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/LEXAB_B.XPT"))
+ferritin_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L06_2_B.XPT"))
+otheriron_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L40FE_B.XPT"))
+diab_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/DIQ_B.XPT"))
+demo_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/DEMO_B.XPT"))
+ldl_tg_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L13AM_B.XPT"))
+hdl_total_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L13_B.XPT"))
+crp_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L11_2_B.XPT"))
+gluc_ins_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L10_2_B.XPT"))
+otherlab_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L40_B.XPT"))
+ht_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/BPQ_B.XPT"))
+smoking_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/SMQ_B.XPT"))
+bmi_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/BMX_B.XPT"))
+hemo_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L25_B.XPT"))
+preg_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/RHQ_B.XPT"))
+medcon_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/MCQ_B.XPT"))
+alc_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/ALQ_B.XPT"))
+hba1c_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L10_B.XPT"))
+paq_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/PAQIAF_B.XPT"))
+paq2_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/PAQ_B.XPT"))
+bld.don_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/HSQ_B.XPT"))
+oral.health_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/OHXREF_B.XPT"))
+urine_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/L16_B.XPT"))
+pattern <- paste(c("ASPIRIN", "CLOPIDOGREL", "TICLOPIDINE","DIPYRIDAMOLE"), collapse = "|")
+medicine_0102<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/RXQ_RX_B.XPT"))%>%
+  select(SEQN,RXD240B,FDACODE1,FDACODE2,FDACODE3,FDACODE4,FDACODE5,FDACODE6)%>%
+  mutate(antihy.lipid=rowSums(across(.cols = everything(), ~str_detect(.x, fixed("0912")))),
+         anti.platelet=if_else(str_detect(RXD240B,regex(pattern)),1,0))%>%
+  select(SEQN,antihy.lipid,anti.platelet)%>%
+  unique()
+rm(pattern)
+bp_0102<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2001-2002/BPX_B.XPT"))
+#merge all dataframes and save as reference data file
+df0102<-purrr::reduce(list(ferritin_0102,otheriron_0102,diab_0102,demo_0102,
+                               ldl_tg_0102,hdl_total_0102,
+                               crp_0102,gluc_ins_0102,otherlab_0102,ht_0102,smoking_0102,
+                           bmi_0102,hemo_0102,preg_0102,medcon_0102,alc_0102,hba1c_0102,
+                           paq_0102,paq2_0102,
+                           bld.don_0102,oral.health_0102,urine_0102,medicine_0102,bp_0102),
+                          dplyr::full_join, by = 'SEQN')%>%
+  right_join(abpi_0102,by = 'SEQN')%>%
+  mutate(MEC6YR=2/3 * WTMEC4YR)#calculate survey weight
+
+#save a single object to a file
+saveRDS(df0102, "~/Docs/myRprojects/nhanes/data_files/df0102.rds")
+
+#some labels of the 01-02 dataset are missing so they need to be added
+library(labelled)
+var_label(df0102)<-list(LB2BCDSI="Cadmium (nmol/L)",LB2BPBSI="Lead (umol/L)",
+                        LB2RBFSI="Folate, RBC (nmol/L RBC)",LB2THGSI="Mercury, total (umol/L)",
+                        LB2HCY="Homocysteine(umol/L)",LB2FERSI="Ferritin (ug/L)",
+                        LB2B12SI="Vitamin B12, serum (pmol/L)",LB2FOLSI="Folate, serum (nmol/L)",
+                        LB2COTLC="Cotinine comment code"
+                        )
+
+#save colnames and attributes as a separate dataframe
+#df0102_names<-purrr::map_df(df0102, ~attributes(.x)) %>%
+#  bind_cols(names = names(df0102), .)
+#saveRDS(df0102_names, "~/Docs/myRprojects/nhanes/data_files/df0102_names.rds")
+```
+
+```{r NHANES_2003-2004}
+#read file directly from the url of NHANES
+
+#df for 2003-2004 
+abpi_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/LEXAB_C.XPT"))
+ferritin_tfr_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L06TFR_C.XPT"))
+otheriron_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L40FE_C.XPT"))
+diab_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/DIQ_C.XPT"))
+demo_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/DEMO_C.XPT"))
+ldl_tg_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L13AM_C.XPT"))
+hdl_total_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L13_C.XPT"))
+crp_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L11_C.XPT"))
+gluc_ins_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L10AM_C.XPT"))
+otherlab_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L40_C.XPT"))
+ht_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/BPQ_C.XPT"))
+smoking_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/SMQ_C.XPT"))
+bmi_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/BMX_C.XPT"))
+hemo_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L25_C.XPT"))
+preg_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/RHQ_C.XPT"))
+medcon_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/MCQ_C.XPT"))
+alc_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/ALQ_C.XPT"))
+hba1c_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L10_C.XPT"))
+paq_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/PAQIAF_C.XPT"))
+paq2_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/PAQ_C.XPT"))
+bld.don_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/HSQ_C.XPT"))
+oral.health_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/OHXREF_C.XPT"))
+urine_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L16_C.XPT"))
+
+#joining medicine for 03-04 involves combining drug information with drug codes and then detecting patterns
+medinfo_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/1999-2000/RXQ_DRUG.xpt"))
+medicine_0304<- haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/RXQ_RX_C.XPT"))%>%
+  left_join(medinfo_0304,by="RXDDRGID")%>%
+  select(SEQN,RXDDCN1B,RXDDCN1C,RXDDCN2B)%>%
+  mutate(antihy.lipid=rowSums(across(.cols = everything(), ~str_detect(.x, "HYPERLIPIDEMIC"))),
+         antihy.lipid=recode(antihy.lipid,"2"=1),
+         anti.platelet=rowSums(across(.cols = everything(), ~str_detect(.x, "ANTIPLATELET"))))%>%
+  select(SEQN,antihy.lipid,anti.platelet)%>%
+  unique()
+rm(medinfo_0304)
+urine_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/L16_C.XPT"))
+bp_0304<-haven::read_xpt(url("https://wwwn.cdc.gov/Nchs/Nhanes/2003-2004/BPX_C.XPT"))
+
+#merge all dataframes and save as reference data file
+df0304<-purrr::reduce(list(ferritin_tfr_0304,otheriron_0304,diab_0304,demo_0304,
+                               ldl_tg_0304,hdl_total_0304,
+                               crp_0304,gluc_ins_0304,otherlab_0304,ht_0304,smoking_0304,bmi_0304,hemo_0304,preg_0304,medcon_0304,alc_0304,hba1c_0304,paq_0304,paq2_0304,
+                           bld.don_0304,oral.health_0304,urine_0304,medicine_0304,bp_0304),
+                          dplyr::full_join, by = 'SEQN')%>%
+  right_join(abpi_0304,by = 'SEQN')%>%
+  mutate(MEC6YR=1/3 * WTMEC2YR)#calculate survey weight
+
+#save a single object to a file
+saveRDS(df0304, "~/Docs/myRprojects/nhanes/data_files/df0304.rds")
+
+#save colnames and attributes as a separate dataframe
+#df0304_names<-purrr::map_df(df0304, ~attributes(.x)) %>%
+#  bind_cols(names = names(df0304), .)
+#saveRDS(df0304_names, "~/Docs/myRprojects/nhanes/data_files/df0304_names.rds")
+```
+
+For analysis, load the datafiles and select the variables of interest: albumin, AST, ALT, BUN, T.Chol, Iron, TGs, Creat, FPG, Insulin, Ferritin, TIBC, HDL, LDL, Gender, Age, Diabetes, Left ABPI, Right ABPI, TSAT, Smoking now, number of cigarettes, HT, CRP,BMI, hemoglobin, BP,ethnicity, insulin inj, oral antidiabetic medication,pregnant, anemia treatment,alcohol intake, hba1c,anti-ht medication,cancer,drinks_perday, leisure activity, activity level, MET activity,vig activity in 30 days, moderate activity in 30 days, last blood donation,periods now,estrogen pills now,progesterone pills now,estrogen/progesterone pills now,estrogen patch now, estrogen/progesterone patch now, breast feeding now,psu,strata,platelet count,dialysis,albuminuria,creatininuria,pregnant_lastyr,antihyperlipidemic, antiplatelet, systolic bp, diastolic bp.
+
+Note: the variable codes could be different for the NHANES datasets of other years
+
+```{r NHANES_2003-2004_Selected-variables}
+
+
+df9900_sel<-readRDS("~/Docs/myRprojects/nhanes/data_files/df9900.rds")%>%
+  dplyr::select(SEQN,LBDSALSI,LBXSATSI,LBXSASSI,LBDSBUSI,LBDSCHSI,
+                LBDIRNSI,LBDSTRSI, LBDSCRSI,LBXGLUSI,LBXINSI,
+                LBDFERSI,LBDTIBSI,LBDHDLSI,LBDLDLSI,
+                RIAGENDR,RIDAGEYR,DIQ010,LEXLABPI,LEXRABPI,
+                LBXPCT,SMQ040,SMQ020,BPQ030,LBXCRP,BMXBMI,LBXHGB,SDMVPSU,MEC6YR,RIDRETH2,DIQ050,DIQ070,SEQ060,MCQ053,ALQ110,LBXGH,BPQ040A,MCQ220,PADTIMES,PADMETS,PAD200,PAD320,HSQ570,RHQ050,RHQ558,RHQ566,RHQ574,RHQ584,RHQ600,RHQ200,SDMVSTRA,LBXPLTSI,OHQ144,URXUMASI,URXUCRSI,RHQ040,antihy.lipid,anti.platelet,BPXSAR,BPXDAR)%>%unique()
+
+df0102_sel<-readRDS("~/Docs/myRprojects/nhanes/data_files/df0102.rds")%>%
+  dplyr::select(SEQN,LBDSALSI,LBXSATSI,LBXSASSI,LBDSBUSI,LBDSCHSI,
+                LBDIRNSI,LBDSTRSI, LBDSCRSI,LB2GLUSI,LB2INSI,
+                LB2FERSI,LBDTIBSI,LBDHDLSI,LBDLDLSI,
+                RIAGENDR,RIDAGEYR,DIQ010,LEXLABPI,LEXRABPI,
+                LBDPCT,SMQ040,SMQ020,BPQ030,LB2CRP,BMXBMI,LBXHGB,SDMVPSU,MEC6YR,RIDRETH2,
+                DIQ050,DIQ070,RHQ141,MCQ053,ALQ110,LBXGH,BPQ040A,MCQ220,PADTIMES,PADMETS,PAD200,PAD320,HSD570,RHQ050,RHQ558,RHQ566,RHQ574,RHQ584,RHQ600,RHQ200,SDMVSTRA,LBXPLTSI,OHQ144,URXUMASI,URXUCRSI,RHQ040,antihy.lipid,anti.platelet,BPXSAR,BPXDAR)%>%unique()
+
+df0304_sel<-readRDS("~/Docs/myRprojects/nhanes/data_files/df0304.rds")%>%
+  dplyr::select(SEQN,LBDSALSI,LBXSATSI,LBXSASSI,LBDSBUSI,LBDSCHSI,
+                LBDIRNSI,LBDSTRSI, LBDSCRSI,LBDGLUSI,LBDINSI,
+                LBDFERSI,LBDTIBSI,LBDHDDSI,LBDLDLSI,
+                RIAGENDR,RIDAGEYR,DIQ010,LEXLABPI,LEXRABPI,
+                LBDPCT,SMQ040,SMQ020,BPQ030,LBXCRP,BMXBMI,
+                LBXHGB,SDMVPSU,MEC6YR,RIDRETH2,
+                DIQ050,DIQ070,RHD143,MCQ053,ALQ110,LBXGH,BPQ040A,MCQ220,PADTIMES,PADMETS,PAD200,PAD320,HSQ571,RHQ051,RHQ558,RHQ566,RHQ574,RHQ584,RHQ600,RHQ200,SDMVSTRA,LBXPLTSI,OHQ144,URXUMASI,URXUCRSI,RHD042,antihy.lipid,anti.platelet,BPXSAR,BPXDAR)%>%unique()
+
+```
+
+Rename variables to enable appending of datasets
+
+```{r Rename}
+names<-c(seqn=1,albumin=2, ast=3, alt=4, urea=5, t.chol=6, iron=7,
+tg=8, creatinine=9, fpg=10, insulin=11, ferritin=12, tibc=13, hdl=14,
+ldl=15, gender=16, age=17, diabetes=18, left.abpi=19, right.abpi=20, 
+tsat=21, smoke_now=22, smoked_100=23,ht=24,crp=25,bmi=26,hb=27,
+psu=28,persWeight=29,ethnicity=30,insulin_now=31,antidiab_now=32,
+pregnant_now=33,iron_suppl=34,drinks_life=35,hba1c=36,antiht_now=37,
+cancer=38,pa.times=39,met.score=40,vig.activity=41,
+mod.activity=42,last_bld.don=43,periods_now=44,est.pills_now=45,prog.pills_now=46,estprog.pills_now=47,est.patches_now=48,estprog.patches_now=49,breast.feed_now=50,strata=51,platelet=52,dialysis=53,albuminuria=54,creatinuria=55,periods_1yr=56,sbp=59,dbp=60)
+
+df9900_sel<-df9900_sel%>%
+  dplyr::rename(names)%>%
+  mutate(study="nhanes99-00")
+
+df0102_sel<-df0102_sel%>%
+  dplyr::rename(names)%>%
+  mutate(study="nhanes01-02")
+
+df0304_sel<-df0304_sel%>%
+  dplyr::rename(names)%>%
+  mutate(study="nhanes03-04")
+
+
+#save a single object to a file
+saveRDS(df9900_sel, "~/Docs/myRprojects/nhanes/data_files/df9900_sel.rds")
+saveRDS(df0102_sel, "~/Docs/myRprojects/nhanes/data_files/df0102_sel.rds")
+saveRDS(df0304_sel, "~/Docs/myRprojects/nhanes/data_files/df0304_sel.rds")
+
+#append all datasets to one for analysis
+df_all<-dplyr::bind_rows(df9900_sel,df0102_sel,df0304_sel)%>%
+  unique()
+
+#save a single object to a file
+saveRDS(df_all, "~/Docs/myRprojects/nhanes/data_files/df_all.rds")
+
+#remove unwanted files
+rm(df0102_sel,df9900_sel,df0304_sel)
+rm(alliron_9900,diab_9900,demo_9900,
+                               ldl_tg_9900,hdl_total_9900,
+                               crp_9900,gluc_ins_9900,otherlab_9900,ht_9900,smoking_9900,
+   bmi_9900,hemo_9900,preg_9900,medcon_9900,alc_9900,hba1c_9900,paq_9900,paq2_9900,
+                           bld.don_9900,rep.health_9900,oral.health_9900,urine_9900,
+   df9900_names,medicine_9900,bp_9900)
+rm(ferritin_0102,otheriron_0102,diab_0102,demo_0102,
+                               ldl_tg_0102,hdl_total_0102,
+                               crp_0102,gluc_ins_0102,otherlab_0102,ht_0102,smoking_0102,
+                           bmi_0102,hemo_0102,preg_0102,medcon_0102,alc_0102,hba1c_0102,
+                           paq_0102,paq2_0102,
+                           bld.don_0102,oral.health_0102,urine_0102,df0102_names,medicine_0102,bp_0102)
+rm(ferritin_tfr_0304,otheriron_0304,diab_0304,demo_0304,
+                               ldl_tg_0304,hdl_total_0304,
+                               crp_0304,gluc_ins_0304,otherlab_0304,ht_0304,smoking_0304,bmi_0304,hemo_0304,preg_0304,medcon_0304,alc_0304,hba1c_0304,paq_0304,paq2_0304,
+                           bld.don_0304,oral.health_0304,urine_0304,df0304_names)
+rm(df9900,df0102,df0304,abpi_9900,abpi_0102,abpi_0304,medicine_0304,bp_0304)
+```

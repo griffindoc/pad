@@ -1,0 +1,69 @@
+---
+title: "nhanes_tables"
+format: html
+editor: visual
+---
+
+#### Load data
+
+```{r}
+# Restore appended NHANES dataset as survey design
+nhanesDesign<-readRDS(here::here("data_files","nhanesDesign.rds"))
+```
+
+Prepare a stratified demographics table with complex survey design.
+
+```{r}
+library(gtsummary)
+
+
+variables.svylist<-c("ethnicity","age","bmi","diab_coded",
+                     "ht_coded","smoking_coded", "drinks_life",
+                     "physical.activity_coded","antihy.lipid","anti.platelet",
+                     "left.abpi","right.abpi","albumin", "ast","alt",
+                     "urea","creatinine","t.chol","tg","ldl","hdl","fpg",
+                     "insulin","crp","hb","fib4","acr",
+                     "iron","ferritin","tsat","tibc")
+
+
+nhanesDesign %>%
+  tbl_strata(
+    strata = gender,
+    .tbl_fun =
+      ~ .x %>%
+  tbl_svysummary(by = "pad", include = variables.svylist,
+                 missing="no",
+                 statistic = list(
+                   all_categorical() ~ "{n_unweighted} ({p})"))%>%
+    add_p(),
+  .header = "**{strata}**, N = {n_unweighted}"
+  )%>%
+  add_n(statistic = "{n_miss} ({p_miss}%)") %>%
+  modify_header(n = "**Missing**")%>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path="~/Docs/myRprojects/nhanes/tables/Demo.nhanes.docx")
+
+
+
+#define the list of variables as a list to pass off as a single argument- only for the 
+#variables.list<-c("ethnicity","gender","age","bmi","diab_coded","ht_coded","smoking_coded", "drinks_life","physical.activity_coded","antihy.lipid","anti.platelet","left.abpi","right.abpi","pad","albumin", "ast","alt","urea","creatinine","t.chol","tg","ldl","hdl","fpg","insulin","crp","hb","fib4","acr","iron","ferritin","tsat","tibc")
+
+#define the table, tbl_strata stratifies the table without survey design
+#df_final%>%
+  select(variables.list)%>%
+  tbl_strata(
+    strata = gender,
+  .tbl_fun =
+    ~ .x %>%
+    tbl_summary(by = pad, missing = "no")%>%
+    add_p()%>%
+    add_n(),
+  .header = "**{strata}**, N = {n}"
+  )%>%
+  as_flex_table() %>%
+  flextable::save_as_docx(path="~/Docs/myRprojects/nhanes/t3.docx")
+
+
+```
+
+The `echo: false` option disables the printing of code (only output is displayed).

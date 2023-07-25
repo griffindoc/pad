@@ -1,0 +1,306 @@
+---
+title: "nhanes_ppt"
+format: html
+runtime: shiny
+---
+
+### Dependencies
+
+```{r, include=FALSE}
+pacman::p_load(officer,rvg,tidyverse,ggplot2,
+               srvyr,svyVGAM,shiny)
+```
+
+### Custom functions
+
+```{r,echo=FALSE}
+
+source("~/Docs/myRprojects/theme_personal.function.R")
+#custom theme
+theme_ppt <- function(base_size = 12, 
+                            dark_text = "#373533") {
+  
+  mid_text <-  monochromeR::generate_palette(dark_text, "go_lighter", n_colours = 5)[2]
+  light_text <-  monochromeR::generate_palette(dark_text, "go_lighter", n_colours = 5)[3]
+  
+  theme_light(base_size = base_size) +
+    theme(text = element_text(colour = mid_text, lineheight = 1.1),
+          plot.title = element_text(colour = dark_text, size = rel(1.2)),
+          plot.subtitle = element_text(size = rel(1.1)),
+          axis.text.y = element_text(colour = light_text, size = rel(1.1)),
+          axis.title.y = element_text(size = 12), 
+          axis.text.x = element_text(colour = mid_text, size=rel(1)),
+          axis.title.x = element_text(size = rel(1)),
+          legend.position = "top",
+          legend.justification = 1,
+          #panel.grid = element_line(colour = "#F3F4F5"),
+          plot.caption = element_text(size = rel(0.9)))
+}
+
+my.cols<-c('#ca0020',"#0571b0")
+my.fill<-c("#f7f7f7","#0571b0",'#f7f7f7',"#ca0020")
+```
+
+### NHANES
+
+#### All iron
+
+```{r}
+
+all.iron <- readRDS(here::here("data_files","all.iron.rds")) |> 
+  mutate(estimate = round(estimate, 2),
+         conf.low = round(conf.low, 2),
+         conf.high = round(conf.high, 2),
+         p.value = sprintf("%.4f", p.value),
+         label = paste0(estimate, " (", conf.low, "-", conf.high, "), P=", p.value),
+         sex=fct_recode(sex,Males="M",Females="F"))
+
+y.labels <- c("Model 1", "Model 2", "Model 3","Model 4",
+              "Model 1", "Model 2", "Model 3","Model 4",
+              "Model 1", "Model 2", "Model 3","Model 4",
+              "Model 1", "Model 2", "Model 3","Model 4")
+
+
+all.iron.f1 <- all.iron|> 
+  ggplot(aes(y=variable, x=estimate,xmin=conf.low,xmax=conf.high))+
+  geom_point(aes(color=p.value<0.05,fill=p.value<0.05),size=3,shape=20,stroke = 1)+
+  geom_linerange(color="#525252",alpha=0.5)+
+  scale_color_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  scale_fill_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  geom_vline(xintercept=1, color='black', linetype='dashed', alpha=.5)+
+  coord_cartesian(xlim = c(-10, 8), clip = "off")+
+  geom_hline(yintercept = c(4.5,8.5,12.5),color="#525252")+
+  annotate(geom="label",x=6, y=3.5,  label="Ferritin")+
+  annotate(geom="label",x=6, y=7.5, label="Iron")+
+  annotate(geom="label",x=6, y=11.5, label="TIBC")+
+  annotate(geom="label",x=6, y=15.5, label="TSAT")+
+  labs(x="Odds Ratio",y="",title="Iron parameters vs PAD: NHANES")+
+  scale_y_discrete(labels=y.labels)+
+  scale_x_continuous(breaks = seq(-3, 8, 2))+
+  facet_grid(. ~ sex)+
+  theme_personal()+
+  theme(legend.title = element_blank(),
+        legend.position = "none",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.x = element_blank())+
+  geom_text(aes(label = label), x=-9, hjust = 0, vjust = 0,size=2.75)
+
+all.iron.f1> ggsave(filename=here::here("Figures","nhanes_all.iron.png"),
+                 width=12.5,height=7.5,dpi=600)
+all.iron.f1> ggsave(filename=here::here("Figures","nhanes_all.iron.pdf"),
+                 width=12.5,height=7.5,dpi=600)
+
+
+```
+
+### Sensitivity analysis
+
+```{r}
+#sensitivity analysis plot
+df_sens <- readRDS(here::here("data_files","df_sens.rds")) |> 
+  mutate(estimate = round(estimate, 2),
+         conf.low = round(conf.low, 2),
+         conf.high = round(conf.high, 2),
+         p.value = sprintf("%.4f", p.value),
+         label = paste0(estimate, " (", conf.low, "-", conf.high, "), P=", p.value),
+         sex=fct_recode(sex,Males="M",Females="F"))
+
+y.labels <- c("Model 1", "Model 2", "Model 3","Model 4",
+              "Model 1", "Model 2", "Model 3","Model 4",
+              "Model 1", "Model 2", "Model 3","Model 4",
+              "Model 1", "Model 2", "Model 3","Model 4")
+
+
+df_sens.f1 <- df_sens|> 
+  ggplot(aes(y=variable, x=estimate,xmin=conf.low,xmax=conf.high))+
+  geom_point(aes(color=p.value<0.05,fill=p.value<0.05),size=3,shape=20,stroke = 1)+
+  geom_linerange(color="#525252",alpha=0.5)+
+  scale_color_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  scale_fill_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  geom_vline(xintercept=1, color='black', linetype='dashed', alpha=.5)+
+  coord_cartesian(xlim = c(-10, 8), clip = "off")+
+  geom_hline(yintercept = c(4.5,8.5,12.5),color="#525252")+
+  annotate(geom="label",x=6, y=3,  label="Ferritin")+
+  annotate(geom="label",x=6, y=7, label="Iron")+
+  annotate(geom="label",x=6, y=11, label="TIBC")+
+  annotate(geom="label",x=6, y=15.5, label="TSAT")+
+  labs(x="Odds Ratio",y="",title="Iron parameters vs PAD: NHANES")+
+  scale_y_discrete(labels=y.labels)+
+  scale_x_continuous(breaks = seq(-3, 8, 2))+
+  theme_personal()+
+  theme(legend.title = element_blank(),
+        legend.position = "none",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.x = element_blank())+
+  facet_grid(. ~ sex)+
+  geom_text(aes(label = label), x=-9, hjust = 0, vjust = 0,size=2.75)
+
+df_sens.f1 |>  ggsave(filename=here::here("Figures","nhanes_df_sens.png"),
+                    width=12.5,height=7.5,dpi=600)
+df_sens.f1 |>  ggsave(filename=here::here("Figures","nhanes_df_sens.pdf"),
+                    width=12.5,height=7.5,dpi=600)
+```
+
+### HEIST-DiC
+
+#### Load file
+
+```{r}
+# Restore saved data
+pad.all<- readRDS(here::here("datafiles_own","pad.all.rds"))
+
+#shape data for plotting
+pad.all <- pad.all |> 
+  mutate_at(vars(CI_low,CI_high),round,2)|>
+  unite("CI",CI_low:CI_high,sep = ", ", remove=FALSE,na.rm = TRUE) |> 
+  mutate(p.val_flag=case_when(Sex=="M" & p<0.05~ "M p<0.05",
+                              Sex=="F" & p<0.05~ "F p<0.05",
+                              p>0.05~ "NS"),
+         Coefficient = round(Coefficient, 2),
+         CI_low = round(CI_low, 2),
+         CI_high = round(CI_high, 2),
+         p= round(p, 2),
+         label = paste0(Coefficient, " (", CI_low, "-", CI_high, "), P=", p),
+         Sex=fct_recode(Sex,Males="M",Females="F")) |> 
+  select(-variable) |> 
+  unite("variable",Parameter,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+own.y.labels<-c("Model 1", "Model 2", "Model 3",
+                "Model 1", "Model 2", "Model 3",
+                "Model 1", "Model 2", "Model 3"
+)
+```
+
+#### PAD vs All iron
+
+```{r}
+
+my.cols<-c('#ca0020',"#0571b0")
+pad.f1<-ggplot(data=pad.all, aes(y=variable, x=Coefficient,xmin=CI_low,xmax=CI_high)) +
+  geom_point(aes(color=p<0.05),shape=20,size=3,stroke=1,alpha=0.7)+
+  geom_linerange(color="#9B9795")+
+  scale_color_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  scale_fill_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  coord_cartesian(xlim = c(-10, 10),clip = "off")+
+  geom_vline(xintercept=1, color='black', linetype='dashed', alpha=.5)+
+  scale_y_discrete(labels=own.y.labels)+
+  scale_x_continuous(breaks = seq(-3, 8, 2))+
+  labs (x="Odds Ratio",y="",title="Serum iron indices vs PAD: HEIST-DiC")+
+  geom_hline(yintercept = c(3.5,6.5),color="#525252")+
+  geom_label(x=7, y=3, color="#373533",label="Ferritin")+
+  geom_label(x=7, y=6, color="#373533",label="Iron")+
+  geom_label(x=7, y=9, color="#373533",label="TSAT")+
+  theme_personal()+
+  theme(legend.title = element_blank(),
+        legend.position = "none",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.x = element_blank())+
+  facet_grid(~Sex)+
+  geom_text(aes(label = label), x=-9, hjust = 0, vjust = 0,size=2.75)
+
+pad.f1 |> ggsave(filename=here::here("Figures","Heist.pad.png"),
+                 width=12.5,height=7.5,dpi=600)
+pad.f1 |> ggsave(filename=here::here("Figures","Heist.pad.pdf"),
+                 width=12.5,height=7.5,dpi=600)
+```
+
+#### ICAM vs all iron
+
+```{r}
+#shape data for plotting
+icam.iron.all <- readRDS(here::here("datafiles_own","icam.iron.all.rds")) |> 
+  mutate_at(vars(conf.low,conf.high),round,2)|>
+  unite("CI",conf.low:conf.high,sep = ", ", remove=FALSE,na.rm = TRUE) |> 
+  mutate(p.val_flag=case_when(Sex=="M" & p.value<0.05~ "M p.value<0.05",
+                              Sex=="F" & p.value<0.05~ "F p.value<0.05",
+                              p.value>0.05~ "NS"),
+         estimate = round(estimate, 2),
+         conf.low = round(conf.low, 2),
+         conf.high = round(conf.high, 2),
+         p.value = sprintf("%.4f", p.value),
+         label = paste0(estimate, " (", conf.low, "-", conf.high, "), P=", p.value),
+         Sex=fct_recode(Sex,Males="M",Females="F")) |> 
+  select(-variable) |> 
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+
+icam.iron.f1<-ggplot(data=icam.iron.all, aes(y=variable, x=estimate,xmin=conf.low,xmax=conf.high)) +
+  geom_point(aes(color=p.value<0.05),shape=20,size=3,stroke=1,alpha=0.7)+
+  geom_linerange(color="#9B9795")+
+  scale_color_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  scale_fill_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  coord_cartesian(xlim = c(-2, 2),clip = "off")+
+  geom_vline(xintercept=0, color='black', linetype='dashed', alpha=.5)+
+  scale_y_discrete(labels=own.y.labels)+
+  labs (x="Estimate",y="",title="Serum iron indices vs ICAM1: HEIST-DiC")+
+  geom_hline(yintercept = c(3.5,6.5),color="#525252")+
+  geom_label(x=1.5, y=3, color="#373533",label="Ferritin")+
+  geom_label(x=1.5, y=6, color="#373533",label="Iron")+
+  geom_label(x=1.5, y=9, color="#373533",label="TSAT")+
+  theme_personal()+
+  theme(legend.title = element_blank(),
+        legend.position = "none",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.x = element_blank())+
+  facet_grid(~Sex)+
+  geom_text(aes(label = label), x=-1.85, hjust = 0, vjust = 0,size=2.75)
+
+icam.iron.f1 |> ggsave(filename=here::here("Figures","Heist.icam.png"),
+                       width=12.5,height=7.5,dpi=600)
+icam.iron.f1 |> ggsave(filename=here::here("Figures","Heist.icam.pdf"),
+                       width=12.5,height=7.5,dpi=600)
+```
+
+#### VCAM vs All iron
+
+```{r}
+#shape data for plotting
+vcam.iron.all <- readRDS(here::here("datafiles_own","vcam.iron.all.rds")) |> 
+  mutate_at(vars(conf.low,conf.high),round,2)|>
+  unite("CI",conf.low:conf.high,sep = ", ", remove=FALSE,na.rm = TRUE) |> 
+  mutate(p.val_flag=case_when(Sex=="M" & p.value<0.05~ "M p.value<0.05",
+                              Sex=="F" & p.value<0.05~ "F p.value<0.05",
+                              p.value>0.05~ "NS"),
+         estimate = round(estimate, 2),
+         conf.low = round(conf.low, 2),
+         conf.high = round(conf.high, 2),
+         p.value = sprintf("%.4f", p.value),
+         label = paste0(estimate, " (", conf.low, "-", conf.high, "), P=", p.value),
+         Sex=fct_recode(Sex,Males="M",Females="F")) |> 
+  select(-variable) |> 
+  unite("variable",term,model, sep=":",na.rm = TRUE, remove = FALSE)
+
+
+vcam.iron.f1<-ggplot(data=vcam.iron.all, aes(y=variable, x=estimate,xmin=conf.low,xmax=conf.high)) +
+  geom_point(aes(color=p.value<0.05),shape=20,size=3,stroke=1,alpha=0.7)+
+  geom_linerange(color="#9B9795")+
+  scale_color_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  scale_fill_manual(labels=c("NS","P<0.05"),values=c("#9b9b9b","#ca0020"))+
+  coord_cartesian(xlim = c(-2, 2),clip = "off")+
+  geom_vline(xintercept=0, color='black', linetype='dashed', alpha=.5)+
+  scale_y_discrete(labels=own.y.labels)+
+  labs (x="Estimate",y="",title="Serum iron indices vs vcam1: HEIST-DiC")+
+  geom_hline(yintercept = c(3.5,6.5),color="#525252")+
+  geom_label(x=1.5, y=3, color="#373533",label="Ferritin")+
+  geom_label(x=1.5, y=6, color="#373533",label="Iron")+
+  geom_label(x=1.5, y=9, color="#373533",label="TSAT")+
+  theme_personal()+
+  theme(legend.title = element_blank(),
+        legend.position = "none",
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.x = element_blank())+
+  facet_grid(~Sex)+
+  geom_text(aes(label = label), x=-1.85, hjust = 0, vjust = 0,size=2.75)
+
+vcam.iron.f1 |> ggsave(filename=here::here("Figures","Heist.vcam.png"),
+                       width=12.5,height=7.5,dpi=600)
+vcam.iron.f1 |> ggsave(filename=here::here("Figures","Heist.vcam.pdf"),
+                       width=12.5,height=7.5,dpi=600)
+```
+
+### 
